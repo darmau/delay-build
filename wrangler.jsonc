@@ -4,13 +4,13 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "astro-build",
+	"name": "delayed-webhook",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-10-24",
 	"migrations": [
 		{
 			"new_sqlite_classes": [
-				"MyDurableObject"
+				"WebhookDelayDurableObject"
 			],
 			"tag": "v1"
 		}
@@ -18,8 +18,8 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "MyDurableObject",
-				"name": "MY_DURABLE_OBJECT"
+				"class_name": "WebhookDelayDurableObject",
+				"name": "WEBHOOK_DELAY_DURABLE_OBJECT"
 			}
 		]
 	},

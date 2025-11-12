@@ -4,10 +4,10 @@
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
-		durableNamespaces: "MyDurableObject";
+        durableNamespaces: "WebhookDelayDurableObject";
 	}
 	interface Env {
-		MY_DURABLE_OBJECT: DurableObjectNamespace<import("./src/index").MyDurableObject>;
+        WEBHOOK_DELAY_DURABLE_OBJECT: DurableObjectNamespace<import("./src/index").WebhookDelayDurableObject>;
 	}
 }
 interface Env extends Cloudflare.Env {}
@@ -7713,7 +7713,7 @@ declare namespace Cloudflare {
     //
     //       // Declares which of the main module's exports are configured with durable storage, and
     //       // thus should behave as Durable Object namsepace bindings.
-    //       durableNamespaces: "MyDurableObject" | "AnotherDurableObject";
+    //       durableNamespaces: "WebhookDelayDurableObject" | "AnotherDurableObject";
     //     }
     //
     // You can use `wrangler types` to generate `GlobalProps` automatically.
