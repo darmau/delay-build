@@ -5,7 +5,6 @@ import {
 } from "cloudflare:workers";
 
 const STATE_KEY = "scheduler-state";
-const DEFAULT_DELAY_MS = 15 * 60 * 1000;
 const JSON_HEADERS = {
 	"content-type": "application/json; charset=utf-8",
 	"cache-control": "no-store",
@@ -21,6 +20,7 @@ type SchedulerState = {
 	lastError?: string;
 	retryCount?: number;
 	delayMs?: number;
+	webhookUrl?: string;
 };
 
 type QueueResponse = {
@@ -37,19 +37,24 @@ type StatusResponse = {
 	lastError?: string;
 	retryCount: number;
 	delayMs?: number;
+	webhookUrl?: string;
 };
 
 export class WebhookDelayDurableObject extends DurableObject<Env> {
-	async queueBuild(): Promise<QueueResponse> {
+	async queueBuild(
+		webhookUrl: string,
+		delaySeconds: number,
+	): Promise<QueueResponse> {
 		const state = await this.getState();
 		const now = Date.now();
-		const delayMs = this.resolveDelayMs();
+		const delayMs = Math.round(delaySeconds * 1000);
 		const scheduledFor = now + delayMs;
 
 		state.lastWebhookAt = now;
 		state.scheduledFor = scheduledFor;
 		state.retryCount = 0;
 		state.delayMs = delayMs;
+		state.webhookUrl = webhookUrl;
 
 		await this.setState(state);
 		await this.ctx.storage.setAlarm(scheduledFor);
@@ -72,6 +77,7 @@ export class WebhookDelayDurableObject extends DurableObject<Env> {
 			lastError: state.lastError,
 			retryCount: state.retryCount ?? 0,
 			delayMs: state.delayMs,
+			webhookUrl: state.webhookUrl,
 		};
 	}
 
@@ -83,19 +89,21 @@ export class WebhookDelayDurableObject extends DurableObject<Env> {
 			return;
 		}
 
-		if (!this.env.BUILD_WEBHOOK_URL) {
-			console.error("Missing BUILD_WEBHOOK_URL binding.");
+		const webhookUrl = state.webhookUrl;
+
+		if (!webhookUrl) {
+			console.error("No webhook URL stored in state.");
 			state.lastBuildAt = Date.now();
 			state.lastBuildStatus = "error";
-			state.lastError = "BUILD_WEBHOOK_URL not configured.";
+			state.lastError = "No webhook URL available for execution.";
 			state.retryCount = (state.retryCount ?? 0) + 1;
 			await this.setState(state);
 			return;
 		}
 
 		try {
-			const response = await fetch(this.env.BUILD_WEBHOOK_URL, {
-				method: this.resolveTriggerMethod(),
+			const response = await fetch(webhookUrl, {
+				method: "POST",
 			});
 
 			if (!response.ok) {
@@ -147,28 +155,6 @@ export class WebhookDelayDurableObject extends DurableObject<Env> {
 
 	private async setState(state: SchedulerState): Promise<void> {
 		await this.ctx.storage.put(STATE_KEY, state);
-	}
-
-	private resolveDelayMs(): number {
-		const rawSeconds = this.env.BUILD_DELAY_SECONDS;
-		if (!rawSeconds) {
-			return DEFAULT_DELAY_MS;
-		}
-
-		const parsedSeconds = Number.parseInt(rawSeconds, 10);
-		if (Number.isNaN(parsedSeconds) || parsedSeconds <= 0) {
-			console.warn(
-				`Invalid BUILD_DELAY_SECONDS value "${rawSeconds}". Falling back to default.`,
-			);
-			return DEFAULT_DELAY_MS;
-		}
-
-		return parsedSeconds * 1000;
-	}
-
-	private resolveTriggerMethod(): "POST" | "GET" {
-		const method = this.env.BUILD_TRIGGER_METHOD?.toUpperCase();
-		return method === "GET" ? "GET" : "POST";
 	}
 
 	private getRetryDelayMs(retryCount: number): number {
@@ -225,14 +211,41 @@ export default {
 			}
 		}
 
+		const webhookUrlHeader = request.headers.get("x-webhook-url");
+		if (!webhookUrlHeader) {
+			return new Response("Missing x-webhook-url header", { status: 400 });
+		}
+
+		let parsedWebhookUrl: URL;
+		try {
+			parsedWebhookUrl = new URL(webhookUrlHeader);
+		} catch {
+			return new Response("Invalid x-webhook-url header", { status: 400 });
+		}
+
+		if (!["http:", "https:"].includes(parsedWebhookUrl.protocol)) {
+			return new Response("Unsupported webhook protocol", { status: 400 });
+		}
+
+		const delaySecondsHeader = request.headers.get("x-delay-seconds");
+		if (!delaySecondsHeader) {
+			return new Response("Missing x-delay-seconds header", { status: 400 });
+		}
+
+		const delaySeconds = Number.parseInt(delaySecondsHeader, 10);
+		if (!Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+			return new Response("Invalid x-delay-seconds header", { status: 400 });
+		}
+
 		const stub = env.WEBHOOK_DELAY_DURABLE_OBJECT.getByName("scheduler");
-		const result = await stub.queueBuild();
+		const result = await stub.queueBuild(parsedWebhookUrl.toString(), delaySeconds);
 
 		return new Response(
 			JSON.stringify({
 				ok: true,
 				scheduledFor: new Date(result.scheduledFor).toISOString(),
 				delaySeconds: Math.round(result.delayMs / 1000),
+				webhookUrl: parsedWebhookUrl.toString(),
 			}),
 			{
 				status: 202,
@@ -267,9 +280,6 @@ function truncateError(error: unknown): string {
 declare global {
 	interface Env {
 		WEBHOOK_DELAY_DURABLE_OBJECT: DurableObjectNamespace<WebhookDelayDurableObject>;
-		BUILD_WEBHOOK_URL: string;
-		BUILD_DELAY_SECONDS?: string;
-		BUILD_TRIGGER_METHOD?: string;
 		WEBHOOK_SECRET?: string;
 	}
 }

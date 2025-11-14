@@ -1,6 +1,6 @@
 {
-	"name": "astro-build",
-	"version": "0.0.0",
+	"name": "webhook-delay",
+	"version": "1.0.0",
 	"private": true,
 	"scripts": {
 		"deploy": "wrangler deploy",
